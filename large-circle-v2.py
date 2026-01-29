@@ -1,5 +1,5 @@
 """
-File: large-circle.py
+File: large-circle-v2.py
 Author: Chuncheng Zhang
 Date: 2026-01-28
 Copyright & Email: chuncheng.zhang@ia.ac.cn
@@ -43,8 +43,8 @@ indices = np.array([
 ], dtype=np.uint32)
 
 shader_script = {
-    'vert': open('./shader/circle/a.vert').read(),
-    'frag': open('./shader/circle/a.frag').read()
+    'vert': open('./shader/circle/b.vert').read(),
+    'frag': open('./shader/circle/b.frag').read()
 }
 
 # %% ---- 2026-01-28 ------------------------
@@ -188,10 +188,7 @@ def key_callback(window, key, scancode, action, mods):
 
     # Toggle dump_mode
     if c == 's':
-        if opt.dump_mode == 1:
-            opt.dump_mode = 2
-        else:
-            opt.dump_mode = 1
+        opt.switch_idle_display_mode()
 
     # Increase blink speed
     if c in '=+':
@@ -241,24 +238,32 @@ def main_render():
 class Options:
     ratio: float  # screen width/height
     tic: float  # tic of the session
-    wedges: int  # how many wedges
-    rings: int  # how many rings
-    max_r: float  # max r limit
+    wedges: int = 12  # how many wedges
+    max_r: float = 0.7  # max r limit
+    ring_edges: list = [0.2, 0.3, 0.5, 0.6, 0.9]  # ring edges
 
-    focus_r1: float  # r1 of focus (inner)
-    focus_r2: float  # r2 of focus (outer)
-    focus_color: tuple  # rgb color of focus
+    # Focus
+    focus_r1: float = 0.02  # r1 of focus (inner)
+    focus_r2: float = 0.05  # r2 of focus (outer)
+    focus_color: tuple = (0, 0, 1)  # rgb color of focus
 
-    blink_freq: float  # blink freq in Hz
-    blink_toggle: bool  # toggle blinking
+    # Blink toggle
+    blink_toggle: bool = False  # toggle blinking
 
-    selected_patches: np.ndarray
+    # Grids
+    grids: int = 4  # Patch splits into grids x grids parts
+
+    # selected patches (idxRing, idxWedge, freq)
+    selected_patches: list = []
 
     # how to display when idle (not blinking)
-    dump_mode: int = 1  # 2 for check mode, 1 for gradient mode
+    # 0 for gradient mode
+    # 1 for checkbox mode
+    # 2 for checkboxGrid mode
+    idle_display_mode: int = 0
 
     # rotate for text
-    rotation_speed: float
+    rotation_speed: float = 0
 
     # UI
     command_mode: bool = False
@@ -282,9 +287,13 @@ class Options:
     def reset_time(self):
         self.tic = time.time()
 
+    def switch_idle_display_mode(self):
+        self.idle_display_mode += 1
+        self.idle_display_mode %= 3
+
     def set(self, shader):
-        loc = glGetUniformLocation(shader, 'uDumpMode')
-        glUniform1i(loc, self.dump_mode)
+        loc = glGetUniformLocation(shader, 'uIdleDisplayMode')
+        glUniform1i(loc, self.idle_display_mode)
 
         loc = glGetUniformLocation(shader, 'uRatio')
         glUniform1f(loc, self.ratio)
@@ -294,15 +303,6 @@ class Options:
 
         loc = glGetUniformLocation(shader, 'uWedges')
         glUniform1i(loc, self.wedges)
-
-        loc = glGetUniformLocation(shader, 'uRings')
-        glUniform1i(loc, self.rings)
-
-        loc = glGetUniformLocation(shader, 'uMaxR')
-        glUniform1f(loc, self.max_r)
-
-        loc = glGetUniformLocation(shader, 'uBlinkFreq')
-        glUniform1f(loc, self.blink_freq)
 
         loc = glGetUniformLocation(shader, 'uBlinkToggle')
         glUniform1i(loc, self.blink_toggle)
@@ -322,15 +322,28 @@ class Options:
         loc = glGetUniformLocation(shader, 'uCommandMode')
         glUniform1i(loc, self.command_mode)
 
+        loc = glGetUniformLocation(shader, 'uGrids')
+        glUniform1i(loc, self.grids)
+
+        # Selected patches
         n = len(self.selected_patches)
-        assert n < 100, f'n should < 100'
-        for i in range(100):
-            element_name = f"uVector[{i}]"
-            loc = glGetUniformLocation(shader, element_name)
-            if i < n:
-                glUniform3f(loc, *self.selected_patches[i])
-            else:
-                glUniform3f(loc, -1, -1, 0)
+        assert n < 100, f'Too many selected_patches({n=})'
+        loc = glGetUniformLocation(shader, 'uNumSelectedPatches')
+        glUniform1i(loc, n)
+        for i in range(n):
+            loc = glGetUniformLocation(shader, f"uSelectedPatches[{i}]")
+            glUniform3f(loc, *self.selected_patches[i])
+
+        # Ring edges
+        n = len(self.ring_edges)
+        assert n < 100, f'Too many ring_edges({n=})'
+        loc = glGetUniformLocation(shader, 'uNumRings')
+        glUniform1i(loc, n)
+        loc = glGetUniformLocation(shader, 'uMaxR')
+        glUniform1f(loc, self.ring_edges[-1])
+        for i in range(n):
+            loc = glGetUniformLocation(shader, f"uRingEdges[{i}]")
+            glUniform1f(loc, self.ring_edges[i])
 
 
 # %% ---- 2026-01-28 ------------------------
@@ -344,15 +357,6 @@ keyboard = KeyboardHandler()
 opt = Options()
 opt.ratio = wnd.width / wnd.height
 opt.reset_time()
-opt.wedges = 12
-opt.rings = 5
-opt.max_r = 0.7
-opt.rotation_speed = 0.0
-opt.blink_freq = 3
-opt.blink_toggle = False
-opt.focus_r1 = 0.02
-opt.focus_r2 = 0.1
-opt.focus_color = (0, 0, 1)
 opt.selected_patches = [
     (0, 1, 10),
     (1, 2, 20),

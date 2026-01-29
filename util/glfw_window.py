@@ -148,7 +148,7 @@ class GLFWWindow(CursorPosition):
         # 配置窗口
         glfw.window_hint(glfw.TRANSPARENT_FRAMEBUFFER, glfw.TRUE)
         glfw.window_hint(glfw.DECORATED, glfw.FALSE)  # 无边框
-        glfw.window_hint(glfw.SAMPLES, 4)  # 抗锯齿
+        glfw.window_hint(glfw.SAMPLES, 8)  # 抗锯齿
         glfw.window_hint(glfw.FLOATING, glfw.TRUE)  # 置顶窗口
 
         # 设置点击穿透
