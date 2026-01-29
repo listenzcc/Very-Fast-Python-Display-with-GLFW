@@ -1,0 +1,7 @@
+freetype_py==2.5.1
+glfw==2.8.0
+loguru==0.7.2
+numpy
+omegaconf==2.3.0
+pandas==2.2.3
+PyOpenGL==3.1.9

@@ -26,6 +26,15 @@ from OpenGL.GL.shaders import compileProgram, compileShader
 
 from util.easy_imports import *
 from util.glfw_window import GLFWWindow, TextAnchor
+from util.parallel.parallel import Parallel
+from parallel_code import Code
+
+
+# %%
+ADDRESS = 'ABCD'
+DESIGN_CONF = './design.conf'
+
+# %%
 
 # Setup triangle points
 # 方形顶点数据：4个顶点，每个包含位置(3) + 颜色(4)
@@ -141,6 +150,7 @@ def key_callback(window, key, scancode, action, mods):
     c = keyboard.process_key(key, mods)
 
     log(f'Key press: {c=}')
+    parallel.send(Code.key_press)
 
     # print(key, c, scancode, action, mods)
 
@@ -205,6 +215,7 @@ def key_callback(window, key, scancode, action, mods):
             if opt.blink_toggle:
                 opt.reset_time()
                 log('Session starts')
+                parallel.send(Code.session_starts)
         else:
             opt.blink_toggle = False
 
@@ -243,13 +254,20 @@ def main_render():
 
     # Execute jobs
     if len(design.jobs) > 0:
-        if design.jobs[0][0] <= t:
+        while design.jobs[0][0] <= t:
             # The job should be executed
             job = design.jobs.pop(0)
             a, b, c = job
-            # setattr(opt, 'selected_patches', [])
             eval(f'setattr(opt, "{b}", {c})')
             log(f'{job=}')
+            if a > 0:
+                if b == 'focus_color':
+                    parallel.send(Code.focus_change)
+                if b == 'selected_patches':
+                    parallel.send(Code.selected_patches_change)
+
+            if len(design.jobs) == 0:
+                break
 
     # Display commands
     variable = 'This can not happen'
@@ -408,9 +426,13 @@ class Design:
         return self.jobs
 
 
-design = Design('./design.conf')
+# %%
+design = Design(DESIGN_CONF)
 design.load_conf()
 [print(e) for e in design.jobs]
+
+parallel = Parallel()
+parallel.reset(ADDRESS)
 
 # %% ---- 2026-01-28 ------------------------
 # Play ground
