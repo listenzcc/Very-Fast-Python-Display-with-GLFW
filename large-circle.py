@@ -216,7 +216,7 @@ def main_render():
     glDrawElements(GL_TRIANGLES, index_count, GL_UNSIGNED_INT, None)
     glBindVertexArray(0)
 
-    t = glfw.get_time()
+    t = opt.get_time()
 
     # wnd.draw_text("Hello Modern OpenGL!",
     #               math.sin(t), math.cos(t), 1.0, color=(1.0, 0.5, 0.2))

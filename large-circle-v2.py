@@ -146,6 +146,13 @@ def key_callback(window, key, scancode, action, mods):
         # Append the command
         if c in 'abcdefghijklmnopqrstuvwxyz1234567890-_=+. ()[],':
             opt.command.append(c)
+            variable_name = ''.join(opt.command)
+            candidates = [
+                e for e in opt.__annotations__ if e.startswith(variable_name)]
+
+            # Found single candidate
+            if len(candidates) == 1:
+                opt.command = [e for e in candidates[0] + ' = ']
 
         if key == glfw.KEY_BACKSPACE:
             opt.command.pop()
@@ -209,28 +216,31 @@ def main_render():
     # glUniform1f(ratio_loc, opt.ratio)
 
     glBindVertexArray(vao)
-    # glDrawArrays(GL_TRIANGLES, 0, 3)
     glDrawElements(GL_TRIANGLES, index_count, GL_UNSIGNED_INT, None)
     glBindVertexArray(0)
 
-    t = glfw.get_time()
+    t = int(1000*opt.get_time())
 
-    # wnd.draw_text("Hello Modern OpenGL!",
-    #               math.sin(t), math.cos(t), 1.0, color=(1.0, 0.5, 0.2))
-    # wnd.draw_text("中文测试", 0.7, 0.5, 1.0, color=(0.2, 0.8, 1.0))
-    # wnd.draw_text("中文测试", 0.7, 0, 1.0, color=(1.0, 1.0, 1.0))
-    # wnd.draw_rect(0.7, 0.0, 0.2, 0.3, 0.5)
+    # Display commands
+    variable = 'This can not happen'
+    if opt.command_mode:
+        cmd = ''.join(opt.command).strip()
+        wnd.draw_text(f'$ {cmd}|', 0, 0.8, 1.0,
+                      TextAnchor.B, color=(1.0, 1.0, 1.0))
+        if cmd:
+            variable = cmd.split(' ')[0]
 
     # Display options
     options = opt.__str__().split('||')
     for i, o in enumerate(options):
-        wnd.draw_text(o, -0.9, 0.9-i*0.06, 0.8,
-                      TextAnchor.L, color=(1.0, 1.0, 1.0))
+        wnd.draw_text(o, -0.9, 0.9-i*0.06, 0.5,
+                      TextAnchor.L,
+                      color=1.0 if o.startswith(variable) else 0.5
+                      )
 
-    # Display commands
-    if opt.command_mode:
-        wnd.draw_text('>> ' + ''.join(opt.command), 0, 0.8, 1.0,
-                      TextAnchor.B, color=(1.0, 1.0, 1.0))
+    # Display time
+    wnd.draw_text(f'{t=:d}', 0, -0.9, 1.0,
+                  TextAnchor.B, color=(1.0, 1.0, 1.0))
 
     return
 
@@ -239,7 +249,6 @@ class Options:
     ratio: float  # screen width/height
     tic: float  # tic of the session
     wedges: int = 12  # how many wedges
-    max_r: float = 0.7  # max r limit
     ring_edges: list = [0.2, 0.3, 0.5, 0.6, 0.9]  # ring edges
 
     # Focus
@@ -349,7 +358,8 @@ class Options:
 # %% ---- 2026-01-28 ------------------------
 # Play ground
 wnd = GLFWWindow()
-wnd.load_font('resource/font/MTCORSVA.TTF')
+# wnd.load_font('resource/font/MTCORSVA.TTF')
+wnd.load_font('resource/font/MSYH.TTC')
 wnd.init_window()
 
 keyboard = KeyboardHandler()
