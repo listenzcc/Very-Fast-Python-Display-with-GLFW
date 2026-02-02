@@ -269,7 +269,7 @@ def main_render():
             if len(design.jobs) == 0:
                 break
 
-    if (False):
+    if True:
         # Display commands
         variable = 'This can not happen'
         if opt.command_mode:
