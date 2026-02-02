@@ -210,7 +210,7 @@ class GLFWWindow(CursorPosition):
             main_render()
 
             # Draw the top bar.
-            self.render_top_bar()
+            # self.render_top_bar()
 
             # Just draw the buffer.
             glfw.swap_buffers(window)
