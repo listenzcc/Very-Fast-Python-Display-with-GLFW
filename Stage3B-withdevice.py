@@ -29,10 +29,55 @@ from util.glfw_window import GLFWWindow, TextAnchor
 from util.parallel.parallel import Parallel
 from parallel_code import Code
 
+# %%
+# Quanlan setup
+from quanlan_util.myquanlan import fix_csv_encoding_for_excel, consumer_process_wrapper, start_consumer_process, DeviceContainer
+
+
+device_id = "390026040074"
+dc = None
+device = None
+signal_queue_proc = None
+
+# --- 状态追踪标志位（防止重复关闭导致报错） ---
+is_acquiring = False
+is_impedance = False
+is_stimulating = False
+
+# 1. 创建设备容器并连接
+dc = DeviceContainer(False)
+logger.info(f"正在连接设备: {device_id}...")
+device = dc.connect(device_id, timeout=30)  
+
+print(f'{device=}')
+
+if device is None:
+    logger.error(f"无法连接到设备：{device_id}")
+    sys.exit(1)
+
+logger.info(f'Connected to {device_id=}')
+
+# 2. 启动数据消费者进程
+sub_res = device.subscribe()
+if sub_res and len(sub_res) > 1:
+    signal_queue_proc = start_consumer_process(
+        consumer_process_wrapper,
+        sub_res[1],
+        "signal",
+        "SignalConsumer"
+    )
+
+# 3. 设备操作：信号采集 + Trigger 测试
+logger.info("设备已连接，开始采集数据...")
+device.set_acq_param([e for e in range(1, 1+64)], 1000, 188)
+
+device.start_acquisition()
+is_acquiring = True   # 标记正在采集
+
 
 # %%
 ADDRESS = 'DEFC'
-DESIGN_CONF = './design_stage3.conf'
+DESIGN_CONF = './design_stage3B.conf'
 
 # %%
 
@@ -137,6 +182,38 @@ class KeyboardHandler:
 # 使用示例
 keyboard = KeyboardHandler()
 
+def on_stop_quanlan():
+    logger.info("信号采集正常结束")
+
+    logger.info("进入资源清理阶段...")
+    try:
+        if device:
+            if is_acquiring:
+                device.stop_acquisition()
+                logger.info("安全补漏：停止信号采集")
+            if is_stimulating:
+                device.stop_stimulation()
+                logger.info("安全补漏：停止电刺激")
+            if is_impedance:
+                device.stop_impedance()
+                logger.info("安全补漏：停止阻抗测量")
+        
+        if signal_queue_proc and signal_queue_proc.is_alive():
+            signal_queue_proc.terminate()
+            logger.info('Terminated signal_queue_proc')
+    except Exception as cleanup_err:
+        logger.error(f"清理资源时出错: {cleanup_err}")
+
+    # === 修复乱码后处理 ===
+    # 修复当前脚本所在工作目录以及自定义日志目录下的 CSV/TXT 文件
+    # fix_csv_encoding_for_excel(CUSTOM_LOG_DIR)
+    fix_csv_encoding_for_excel(".") 
+
+    # Wait for data saving
+    time.sleep(1)
+
+    logger.info("程序运行结束。")
+    return
 
 def key_callback(window, key, scancode, action, mods):
     '''
@@ -150,7 +227,8 @@ def key_callback(window, key, scancode, action, mods):
     c = keyboard.process_key(key, mods)
 
     log(f'Key press: {c=}')
-    parallel.send(Code.key_press)
+    # parallel.send(Code.key_press)
+    device.trigger('KeyPress')
 
     # print(key, c, scancode, action, mods)
 
@@ -197,6 +275,7 @@ def key_callback(window, key, scancode, action, mods):
     # Close the window if ESC is pressed.
     if key == glfw.KEY_ESCAPE:
         print("ESC is pressed, bye bye.")
+        on_stop_quanlan()
         glfw.set_window_should_close(window, True)
 
     # Toggle rotation
@@ -215,7 +294,8 @@ def key_callback(window, key, scancode, action, mods):
             if opt.blink_toggle:
                 opt.reset_time()
                 log('Session starts')
-                parallel.send(Code.session_starts)
+                # parallel.send(Code.session_starts)
+                device.trigger('SessionStarts')
         else:
             opt.blink_toggle = False
 
@@ -262,9 +342,13 @@ def main_render():
             log(f'{job=}')
             if a > -10:
                 if b == 'focus_color':
-                    parallel.send(Code.focus_change)
+                    # parallel.send(Code.focus_change)
+                    device.trigger('FocusChange')
+                    pass
                 if b == 'selected_patches':
-                    parallel.send(Code.selected_patches_change)
+                    # parallel.send(Code.selected_patches_change)
+                    device.trigger('SelectedPatchesChange')
+                    pass
 
             if len(design.jobs) == 0:
                 break
@@ -432,8 +516,8 @@ design = Design(DESIGN_CONF)
 design.load_conf()
 [print(e) for e in design.jobs]
 
-parallel = Parallel()
-parallel.reset(ADDRESS)
+# parallel = Parallel()
+# parallel.reset(ADDRESS)
 
 # %% ---- 2026-01-28 ------------------------
 # Play ground
@@ -453,10 +537,9 @@ opt.selected_patches = [
 ]
 
 print(opt)
-
+glfw.swap_interval(1)
 shader, vao, index_count = compile_square()
 
-glfw.swap_interval(1)
 glfw.set_key_callback(wnd.window, key_callback)
 
 wnd.render_loop(main_render)

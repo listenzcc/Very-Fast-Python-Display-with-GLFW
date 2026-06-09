@@ -32,7 +32,7 @@ from parallel_code import Code
 
 # %%
 ADDRESS = 'DEFC'
-DESIGN_CONF = './design_stage3.conf'
+DESIGN_CONF = './design_stage1.conf'
 
 # %%
 
@@ -150,7 +150,7 @@ def key_callback(window, key, scancode, action, mods):
     c = keyboard.process_key(key, mods)
 
     log(f'Key press: {c=}')
-    parallel.send(Code.key_press)
+    # parallel.send(Code.key_press)
 
     # print(key, c, scancode, action, mods)
 
@@ -215,7 +215,7 @@ def key_callback(window, key, scancode, action, mods):
             if opt.blink_toggle:
                 opt.reset_time()
                 log('Session starts')
-                parallel.send(Code.session_starts)
+                # parallel.send(Code.session_starts)
         else:
             opt.blink_toggle = False
 
@@ -262,9 +262,11 @@ def main_render():
             log(f'{job=}')
             if a > -10:
                 if b == 'focus_color':
-                    parallel.send(Code.focus_change)
+                    # parallel.send(Code.focus_change)
+                    pass
                 if b == 'selected_patches':
-                    parallel.send(Code.selected_patches_change)
+                    # parallel.send(Code.selected_patches_change)
+                    pass
 
             if len(design.jobs) == 0:
                 break
@@ -432,8 +434,8 @@ design = Design(DESIGN_CONF)
 design.load_conf()
 [print(e) for e in design.jobs]
 
-parallel = Parallel()
-parallel.reset(ADDRESS)
+# parallel = Parallel()
+# parallel.reset(ADDRESS)
 
 # %% ---- 2026-01-28 ------------------------
 # Play ground
@@ -456,7 +458,6 @@ print(opt)
 
 shader, vao, index_count = compile_square()
 
-glfw.swap_interval(1)
 glfw.set_key_callback(wnd.window, key_callback)
 
 wnd.render_loop(main_render)
