@@ -1,3 +1,10 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Fri Jun 12 14:34:39 2026
+
+@author: liangyi
+"""
+
 """
 File: large-circle-under-control.py
 Author: Chuncheng Zhang
@@ -7,49 +14,77 @@ Copyright & Email: chuncheng.zhang@ia.ac.cn
 Purpose:
     Render large circle to the screen.
     Make it under control by the configure file.
-
-Functions:
-    1. Requirements and constants
-    2. Function and class
-    3. Play ground
-    4. Pending
-    5. Pending
 """
-
 
 # %% ---- 2026-01-28 ------------------------
 # Requirements and constants
+import os
 import glfw
-
+import random
+import sys
+import time
+from pathlib import Path
+import numpy as np
 from OpenGL.GL import *
 from OpenGL.GL.shaders import compileProgram, compileShader
-
 from util.easy_imports import *
 from util.glfw_window import GLFWWindow, TextAnchor
 from util.parallel.parallel import Parallel
+from quanlan_util.myquanlan import fix_csv_encoding_for_excel, consumer_process_wrapper, start_consumer_process, DeviceContainer
 from parallel_code import Code
 
 
+# =========================================================================
+# 🔒 Loguru 日志异步队列安全重配置
+# =========================================================================
+# logger.remove()
+# logger.add(sys.stderr, level="INFO")
+
+# LOG_FILE_PATH = "D:/Desktop/客户相关/301眼科/20260610/301-SSVEP/log/Very Fast Python Display with GLFW.log"
+# logger.add(
+#     LOG_FILE_PATH,
+#     rotation="10 MB",
+#     enqueue=True,      # 启用异步线程单点写入管道
+#     level="DEBUG",
+#     encoding="utf-8"
+# )
+# =========================================================================
+
 # %%
+# Quanlan setup
+
+device_id = "390026040074"
+dc = None
+device = None
+signal_queue_proc = None
+
+# --- 状态追踪标志位 ---
+is_acquiring = False
+is_stimulating = False
+is_impedance = False
+
+# 全局变量占位
+wnd = None
+opt = None
+shader = None
+vao = None
+index_count = None
+design = None
+
 ADDRESS = 'DEFC'
-DESIGN_CONF = './design_stage3.conf'
+DESIGN_CONF = './design_stage3B.conf'
 
-# %%
-
-# Setup triangle points
 # 方形顶点数据：4个顶点，每个包含位置(3) + 颜色(4)
 vertices = np.array([
-    # 位置(x,y,z)     颜色(r,g,b,a)
     -1,  1, 0, 1, 0, 0, 0.5,  # 0: 左上
     1,  1, 0, 0, 1, 0, 0.5,  # 1: 右上
     1, -1, 0, 0, 0, 1, 0.5,  # 2: 右下
     -1, -1, 0, 1, 1, 0, 0.5,  # 3: 左下
 ], dtype=np.float32)
 
-# 加上索引缓冲 (IBO/EBO)
 indices = np.array([
-    0, 1, 2,  # 第一个三角形
-    2, 3, 0,  # 第二个三角形
+    0, 1, 2,
+    2, 3, 0,
 ], dtype=np.uint32)
 
 shader_script = {
@@ -57,33 +92,27 @@ shader_script = {
     'frag': open('./shader/circle/b.frag').read()
 }
 
-# %% ---- 2026-01-28 ------------------------
-# Function and class
-
 
 def log(msg):
-    t = int(1000*opt.get_time())
-    logger.debug(f'{t=}, {msg}')
+    if opt:
+        t = int(1000*opt.get_time())
+        logger.debug(f'{t=}, {msg}')
 
 
 def compile_square():
-    # 创建VAO、VBO、EBO
     vao = glGenVertexArrays(1)
     vbo = glGenBuffers(1)
     ebo = glGenBuffers(1)
 
     glBindVertexArray(vao)
 
-    # 绑定顶点数据
     glBindBuffer(GL_ARRAY_BUFFER, vbo)
     glBufferData(GL_ARRAY_BUFFER, vertices.nbytes, vertices, GL_STATIC_DRAW)
 
-    # 绑定索引数据
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ebo)
     glBufferData(GL_ELEMENT_ARRAY_BUFFER,
                  indices.nbytes, indices, GL_STATIC_DRAW)
 
-    # 设置顶点属性（stride仍然是28字节）
     glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 7 * 4, ctypes.c_void_p(0))
     glEnableVertexAttribArray(0)
 
@@ -91,17 +120,14 @@ def compile_square():
                           7 * 4, ctypes.c_void_p(3*4))
     glEnableVertexAttribArray(1)
 
-    # 注意：EBO要保持在VAO绑定状态下
     glBindBuffer(GL_ARRAY_BUFFER, 0)
-    glBindVertexArray(0)  # 这会保存EBO绑定
+    glBindVertexArray(0)
 
-    # 编译着色器
     shader = compileProgram(
         compileShader(shader_script['vert'], GL_VERTEX_SHADER),
         compileShader(shader_script['frag'], GL_FRAGMENT_SHADER),
     )
-
-    return shader, vao, len(indices)  # 返回索引数量
+    return shader, vao, len(indices)
 
 
 class KeyboardHandler:
@@ -109,7 +135,6 @@ class KeyboardHandler:
         self.shift_map = self._create_shift_map()
 
     def _create_shift_map(self):
-        '''创建Shift键映射表'''
         return {
             '-': '_', '=': '+', '9': '(', '0': ')',
             '[': '{', ']': '}', ';': ':', "'": '"',
@@ -120,55 +145,108 @@ class KeyboardHandler:
         }
 
     def process_key(self, key, mods):
-        '''处理按键，返回转换后的字符'''
-        base_char = chr(key).lower()
+        try:
+            base_char = chr(key).lower()
+        except ValueError:
+            return ''
         has_shift = mods & glfw.MOD_SHIFT
-
         if has_shift:
-            # 检查是否是特殊字符
             if base_char in self.shift_map:
                 return self.shift_map[base_char]
-            # 否则转换为大写
             return base_char.upper()
         else:
             return base_char
 
 
-# 使用示例
 keyboard = KeyboardHandler()
 
 
-def key_callback(window, key, scancode, action, mods):
-    '''
-    Key press callback.
-    '''
+def on_stop_quanlan():
+    global is_acquiring, is_stimulating, is_impedance
+    logger.info("🎬 收到退出信号，开始执行安全下线与 BDF 标签保护流水线...")
 
-    # Only be interested in PRESS event.
+    try:
+        if device:
+            # 1. 停止硬件信号发送，防止新数据继续涌入队列
+            if is_acquiring:
+                device.stop_acquisition()
+                is_acquiring = False
+                logger.info("1. 硬件信号采集已停止")
+            if is_stimulating:
+                device.stop_stimulation()
+                is_stimulating = False
+                logger.info("安全补漏：停止电刺激")
+            if is_impedance:
+                device.stop_impedance()
+                is_impedance = False
+                logger.info("安全补漏：停止阻抗测量")
+
+        # 2. 向数据消费者进程发送退出封口信号
+        if signal_queue_proc and signal_queue_proc.is_alive():
+            if hasattr(signal_queue_proc, 'put'):
+                signal_queue_proc.put(None)
+                logger.info('2. 已向数据消费者进程发送【退出封口信号】')
+            else:
+                logger.info('2. 等待底层消费者自动将剩余队列消化并关闭...')
+
+        # 3. 极其重要：留出充分的时间，把队列里残留的 Trigger 标签和脑电数据全部写入硬盘并封口
+        logger.info("3. 正在等待最后一批缓冲数据与标签落盘，请勿强行关闭...")
+        time.sleep(3.0)
+
+        # 4. 🛠️ 修复二：安全兼容退订设备（显式传递 "signal" 主题，消灭 missing 1 positional argument 报错）
+        if device:
+            try:
+                device.unsubscribe("signal")
+            except Exception:
+                try:
+                    device.unsubscribe()
+                except:
+                    pass
+            logger.success("4. SDK 设备连接已成功注销，硬件会话已释放")
+
+    except Exception as cleanup_err:
+        logger.error(f"❌ 清理资源或固化 BDF 标签时出错: {cleanup_err}")
+
+    # === 修复乱码后处理 ===
+    try:
+        fix_csv_encoding_for_excel(".")
+        logger.info("5. 编码后处理完成。")
+    except Exception as e:
+        logger.error(f"后处理失败: {e}")
+
+    logger.success("🏁 【全部任务顺利完成】BDF 文件已安全闭合，标签已固化。程序即将退出。")
+    time.sleep(0.5)
+
+    # 内核级强制安全退出，彻底避免多进程/C++残留带来的挂起死锁
+    os._exit(0)
+
+
+def key_callback(window, key, scancode, action, mods):
     if not action == glfw.PRESS:
         return
 
+    # F12 强制安全终止
+    if key == glfw.KEY_F12:
+        logger.warning("F12 强制安全终止被触发！正在紧急保存当前 BDF 数据及 Trigger 标签...")
+        on_stop_quanlan()
+
     c = keyboard.process_key(key, mods)
-
-    log(f'Key press: {c=}')
-    parallel.send(Code.key_press)
-
-    # print(key, c, scancode, action, mods)
+    if c:
+        log(f'Key press: {c=}')
+        if device:
+            device.trigger('KeyPress')
 
     # In command mode
     if opt.command_mode:
-        # Clear command and escape command_mode
         if key == glfw.KEY_ESCAPE:
             opt.clear_command()
             opt.command_mode = False
 
-        # Append the command
         if c in 'abcdefghijklmnopqrstuvwxyz1234567890-_=+. ()[],':
             opt.command.append(c)
             variable_name = ''.join(opt.command)
             candidates = [
                 e for e in opt.__annotations__ if e.startswith(variable_name)]
-
-            # Found single candidate
             if len(candidates) == 1:
                 opt.command = [e for e in candidates[0] + ' = ']
 
@@ -186,144 +264,86 @@ def key_callback(window, key, scancode, action, mods):
                 pass
             opt.clear_command()
             opt.command_mode = False
-
         return
 
-    # Enter the command mode
     if c in ';:' and mods:
         opt.command_mode = True
         return
 
-    # Close the window if ESC is pressed.
     if key == glfw.KEY_ESCAPE:
-        print("ESC is pressed, bye bye.")
-        glfw.set_window_should_close(window, True)
+        logger.info("ESC被按下，正在安全退出...")
+        on_stop_quanlan()
 
-    # Toggle rotation
     if c == 'r':
-        opt.rotation_speed = 1-opt.rotation_speed
+        opt.rotation_speed = 1 - opt.rotation_speed
 
-    # Toggle blink
     if c == 'b':
-        # ! Session starts or stops
         if not opt.blink_toggle:
-            # Load conf in advance in case it is slow.
             design.load_conf()
-
             opt.blink_toggle = True
-
             if opt.blink_toggle:
                 opt.reset_time()
                 log('Session starts')
-                parallel.send(Code.session_starts)
+                if device:
+                    device.trigger('SessionStarts')
         else:
             opt.blink_toggle = False
 
-    # Change focus color
     if c == 'f':
         opt.focus_color = tuple([random.random() for _ in range(3)])
 
-    # Toggle dump_mode
     if c == 's':
         opt.switch_idle_display_mode()
 
-    # Increase blink speed
     if c in '=+':
         opt.blink_freq = min(opt.blink_freq+(1 if mods else 0.1), 20)
 
-    # Decree blink speed
     if c in '-_':
         opt.blink_freq = max(opt.blink_freq-(1 if mods else 0.1), 0.5)
-
     return
 
 
 def main_render():
     glUseProgram(shader)
-
     opt.set(shader)
-    # ratio_loc = glGetUniformLocation(shader, 'uRatio')
-    # glUniform1f(ratio_loc, opt.ratio)
 
     glBindVertexArray(vao)
     glDrawElements(GL_TRIANGLES, index_count, GL_UNSIGNED_INT, None)
     glBindVertexArray(0)
 
-    # Read current time and convert into ms
-    t = int(1000*opt.get_time())
+    t = int(1000 * opt.get_time())
 
     # Execute jobs
     if len(design.jobs) > 0:
-        while design.jobs[0][0] <= t:
-            # The job should be executed
+        while len(design.jobs) > 0 and design.jobs[0][0] <= t:
             job = design.jobs.pop(0)
             a, b, c = job
             eval(f'setattr(opt, "{b}", {c})')
             log(f'{job=}')
             if a > -10:
                 if b == 'focus_color':
-                    parallel.send(Code.focus_change)
+                    if device:
+                        device.trigger('FocusChange')
                 if b == 'selected_patches':
-                    parallel.send(Code.selected_patches_change)
-
-            if len(design.jobs) == 0:
-                break
-
-    if False:
-        # Display commands
-        variable = 'This can not happen'
-        if opt.command_mode:
-            cmd = ''.join(opt.command).strip()
-            wnd.draw_text(f'$ {cmd}|', 0, 0.8, 1.0,
-                        TextAnchor.B, color=(1.0, 1.0, 1.0))
-            if cmd:
-                variable = cmd.split(' ')[0]
-
-        # Display options
-        options = opt.__str__().split('||')
-        for i, o in enumerate(options):
-            wnd.draw_text(o, -0.9, 0.9-i*0.06, 0.5,
-                        TextAnchor.L,
-                        color=1.0 if o.startswith(variable) else 0.5
-                        )
-
-        # Display time
-        wnd.draw_text(f'{t=:d}', 0, -0.9, 1.0,
-                    TextAnchor.B, color=(1.0, 1.0, 1.0))
-
+                    if device:
+                        device.trigger('SelectedPatchesChange')
     return
 
 
 class Options:
-    ratio: float  # screen width/height
-    tic: float  # tic of the session
-    wedges: int = 12  # how many wedges
-    ring_edges: list = [0.2, 0.3, 0.5, 0.6, 0.9]  # ring edges
+    ratio: float
+    tic: float
+    wedges: int = 12
+    ring_edges: list = [0.2, 0.3, 0.5, 0.6, 0.9]
 
-    # Focus
-    focus_r1: float = 0.02  # r1 of focus (inner)
-    focus_r2: float = 0.05  # r2 of focus (outer)
-    focus_color: tuple = (0, 0, 1)  # rgb color of focus
-
-    # Blink toggle
-    blink_toggle: bool = False  # toggle blinking
-
-    # Grids
-    grids: int = 4  # Patch splits into grids x grids parts
-
-    # selected patches (idxRing, idxWedge, freq)
+    focus_r1: float = 0.02
+    focus_r2: float = 0.05
+    focus_color: tuple = (0, 0, 1)
+    blink_toggle: bool = False
+    grids: int = 4
     selected_patches: list = []
-
-    # how to display when idle (not blinking)
-    # 0 for gradient mode
-    # 1 for checkbox mode
-    # 2 for checkboxGrid mode
     idle_display_mode: int = 0
-
-    # rotate for text
     rotation_speed: float = 0
-
-    # UI
     command_mode: bool = False
     command: list = []
 
@@ -383,7 +403,6 @@ class Options:
         loc = glGetUniformLocation(shader, 'uGrids')
         glUniform1i(loc, self.grids)
 
-        # Selected patches
         n = len(self.selected_patches)
         assert n < 100, f'Too many selected_patches({n=})'
         loc = glGetUniformLocation(shader, 'uNumSelectedPatches')
@@ -392,7 +411,6 @@ class Options:
             loc = glGetUniformLocation(shader, f"uSelectedPatches[{i}]")
             glUniform3f(loc, *self.selected_patches[i])
 
-        # Ring edges
         n = len(self.ring_edges)
         assert n < 100, f'Too many ring_edges({n=})'
         loc = glGetUniformLocation(shader, 'uNumRings')
@@ -427,45 +445,77 @@ class Design:
         return self.jobs
 
 
-# %%
-design = Design(DESIGN_CONF)
-design.load_conf()
-[print(e) for e in design.jobs]
+# %% ---- 🔒 核心多进程与异常保护伞 ------------------------
+if __name__ == '__main__':
+    import multiprocessing
+    multiprocessing.freeze_support()
 
-parallel = Parallel()
-parallel.reset(ADDRESS)
+    # 1. 创建设备容器并连接
+    dc = DeviceContainer(False)
+    logger.info(f"正在连接设备: {device_id}...")
+    device = dc.connect(device_id, timeout=30)
 
-# %% ---- 2026-01-28 ------------------------
-# Play ground
-wnd = GLFWWindow()
-# wnd.load_font('resource/font/MTCORSVA.TTF')
-wnd.load_font('resource/font/MSYH.TTC')
-wnd.init_window()
+    if device is None:
+        logger.error(f"无法连接到设备：{device_id}")
+        sys.exit(1)
 
-keyboard = KeyboardHandler()
+    logger.info(f'Connected to {device_id=}')
 
-opt = Options()
-opt.ratio = wnd.width / wnd.height
-opt.reset_time()
-opt.selected_patches = [
-    (0, 1, 10),
-    (1, 2, 20),
-]
+    # 2. 启动数据消费者进程
+    sub_res = device.subscribe()
+    if sub_res and len(sub_res) > 1:
+        signal_queue_proc = start_consumer_process(
+            consumer_process_wrapper,
+            sub_res[1],
+            "signal",
+            "SignalConsumer"
+        )
 
-print(opt)
+    # 3. 设备参数配置与采集启动
+    logger.info("设备已连接，开始采集数据...")
+    device.set_acq_param([e for e in range(1, 1+64)], 1000, 188)
 
-shader, vao, index_count = compile_square()
+    device.start_acquisition()
+    is_acquiring = True
 
-glfw.swap_interval(1)
-glfw.set_key_callback(wnd.window, key_callback)
+    # 加载设计配置
+    design = Design(DESIGN_CONF)
+    design.load_conf()
 
-wnd.render_loop(main_render)
+    # 4. 初始化渲染窗口
+    wnd = GLFWWindow()
+    wnd.load_font('resource/font/MSYH.TTC')
+    wnd.init_window()
 
-wnd.cleanup()
+    opt = Options()
+    opt.ratio = wnd.width / wnd.height
+    opt.reset_time()
+    opt.selected_patches = [(0, 1, 10), (1, 2, 20)]
 
-# %% ---- 2026-01-28 ------------------------
-# Pending
+    # =========================================================================
+    # 🔄 核心复原：开启 120Hz 垂直同步（V-Sync 开启）
+    # =========================================================================
+    glfw.swap_interval(1)  # 设为 1：复原高刷同步，严格按照 120Hz 屏幕物理刷新率进行刺激渲染
+    # =========================================================================
 
+    shader, vao, index_count = compile_square()
+    glfw.set_key_callback(wnd.window, key_callback)
 
-# %% ---- 2026-01-28 ------------------------
-# Pending
+    # =========================================================================
+    # 🔒 修复一：优化全局信号拦截器（完美解决 KeyboardInterrupt 未预料异常报错）
+    # =========================================================================
+    try:
+        logger.info("进入渲染死循环，120Hz 垂直同步已就绪。")
+        wnd.render_loop(main_render)
+    except (KeyboardInterrupt, SystemExit):
+        # 显式捕获中断与退出信号，消除包裹类报错
+        logger.warning("检测到用户执行了快捷键终止 (Ctrl+C)，正在拦截并安全进入落盘流程...")
+    except BaseException as run_err:
+        # 兼容 C++ 底层信号向上抛出的特殊异常基类
+        logger.warning(f"主循环因信号或中断安全退出: {run_err}")
+    finally:
+        try:
+            wnd.cleanup()
+        except:
+            pass
+        on_stop_quanlan()

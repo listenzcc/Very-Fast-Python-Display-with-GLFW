@@ -19,6 +19,8 @@ Functions:
 
 # %% ---- 2026-01-28 ------------------------
 # Requirements and constants
+import os
+import sys
 import glfw
 
 from OpenGL.GL import *
@@ -29,10 +31,64 @@ from util.glfw_window import GLFWWindow, TextAnchor
 from util.parallel.parallel import Parallel
 from parallel_code import Code
 
+# %%
+# Quanlan setup
+from quanlan_util.myquanlan import fix_csv_encoding_for_excel, consumer_process_wrapper, start_consumer_process, DeviceContainer
+
+device_id = "390026040074"
+dc = None
+device = None
+signal_queue_proc = None
+
+# --- 状态追踪标志位（防止重复关闭导致报错） ---
+is_acquiring = False
+is_impedance = False
+is_stimulating = False
+
+# 全局变量占位
+wnd = None
+opt = None
+shader = None
+vao = None
+index_count = None
+design = None
+
+# %%
+'''
+# 1. 创建设备容器并连接
+dc = DeviceContainer(False)
+logger.info(f"正在连接设备: {device_id}...")
+device = dc.connect(device_id, timeout=30)
+
+print(f'{device=}')
+
+if device is None:
+    logger.error(f"无法连接到设备：{device_id}")
+    sys.exit(1)
+
+logger.info(f'Connected to {device_id=}')
+
+# 2. 启动数据消费者进程
+sub_res = device.subscribe()
+if sub_res and len(sub_res) > 1:
+    signal_queue_proc = start_consumer_process(
+        consumer_process_wrapper,
+        sub_res[1],
+        "signal",
+        "SignalConsumer"
+    )
+
+# 3. 设备操作：信号采集 + Trigger 测试
+logger.info("设备已连接，开始采集数据...")
+device.set_acq_param([e for e in range(1, 1+64)], 1000, 188)
+
+device.start_acquisition()
+is_acquiring = True   # 标记正在采集
+'''
 
 # %%
 ADDRESS = 'DEFC'
-DESIGN_CONF = './design_stage3.conf'
+DESIGN_CONF = './design_stage1.conf'
 
 # %%
 
@@ -138,6 +194,66 @@ class KeyboardHandler:
 keyboard = KeyboardHandler()
 
 
+def on_stop_quanlan():
+    global is_acquiring, is_stimulating, is_impedance
+    logger.info("🎬 收到退出信号，开始执行安全下线与 BDF 标签保护流水线...")
+
+    try:
+        if device:
+            # 1. 停止硬件信号发送，防止新数据继续涌入队列
+            if is_acquiring:
+                device.stop_acquisition()
+                is_acquiring = False
+                logger.info("1. 硬件信号采集已停止")
+            if is_stimulating:
+                device.stop_stimulation()
+                is_stimulating = False
+                logger.info("安全补漏：停止电刺激")
+            if is_impedance:
+                device.stop_impedance()
+                is_impedance = False
+                logger.info("安全补漏：停止阻抗测量")
+
+        # 2. 向数据消费者进程发送退出封口信号
+        if signal_queue_proc and signal_queue_proc.is_alive():
+            if hasattr(signal_queue_proc, 'put'):
+                signal_queue_proc.put(None)
+                logger.info('2. 已向数据消费者进程发送【退出封口信号】')
+            else:
+                logger.info('2. 等待底层消费者自动将剩余队列消化并关闭...')
+
+        # 3. 极其重要：留出充分的时间，把队列里残留的 Trigger 标签和脑电数据全部写入硬盘并封口
+        logger.info("3. 正在等待最后一批缓冲数据与标签落盘，请勿强行关闭...")
+        time.sleep(3.0)
+
+        # 4. 🛠️ 修复二：安全兼容退订设备（显式传递 "signal" 主题，消灭 missing 1 positional argument 报错）
+        if device:
+            try:
+                device.unsubscribe("signal")
+            except Exception:
+                try:
+                    device.unsubscribe()
+                except:
+                    pass
+            logger.success("4. SDK 设备连接已成功注销，硬件会话已释放")
+
+    except Exception as cleanup_err:
+        logger.error(f"❌ 清理资源或固化 BDF 标签时出错: {cleanup_err}")
+
+    # === 修复乱码后处理 ===
+    try:
+        fix_csv_encoding_for_excel(".")
+        logger.info("5. 编码后处理完成。")
+    except Exception as e:
+        logger.error(f"后处理失败: {e}")
+
+    logger.success("🏁 【全部任务顺利完成】BDF 文件已安全闭合，标签已固化。程序即将退出。")
+    time.sleep(0.5)
+
+    # 内核级强制安全退出，彻底避免多进程/C++残留带来的挂起死锁
+    os._exit(0)
+
+
 def key_callback(window, key, scancode, action, mods):
     '''
     Key press callback.
@@ -150,7 +266,8 @@ def key_callback(window, key, scancode, action, mods):
     c = keyboard.process_key(key, mods)
 
     log(f'Key press: {c=}')
-    parallel.send(Code.key_press)
+    # parallel.send(Code.key_press)
+    device.trigger("KeyPress")
 
     # print(key, c, scancode, action, mods)
 
@@ -197,6 +314,9 @@ def key_callback(window, key, scancode, action, mods):
     # Close the window if ESC is pressed.
     if key == glfw.KEY_ESCAPE:
         print("ESC is pressed, bye bye.")
+
+        on_stop_quanlan()
+
         glfw.set_window_should_close(window, True)
 
     # Toggle rotation
@@ -215,7 +335,8 @@ def key_callback(window, key, scancode, action, mods):
             if opt.blink_toggle:
                 opt.reset_time()
                 log('Session starts')
-                parallel.send(Code.session_starts)
+                # parallel.send(Code.session_starts)
+                device.trigger("SessionStarts")
         else:
             opt.blink_toggle = False
 
@@ -262,9 +383,13 @@ def main_render():
             log(f'{job=}')
             if a > -10:
                 if b == 'focus_color':
-                    parallel.send(Code.focus_change)
+                    # parallel.send(Code.focus_change)
+                    device.trigger("FocusColor")
+                    pass
                 if b == 'selected_patches':
-                    parallel.send(Code.selected_patches_change)
+                    # parallel.send(Code.selected_patches_change)
+                    device.trigger("SelectedPatchesChange")
+                    pass
 
             if len(design.jobs) == 0:
                 break
@@ -275,7 +400,7 @@ def main_render():
         if opt.command_mode:
             cmd = ''.join(opt.command).strip()
             wnd.draw_text(f'$ {cmd}|', 0, 0.8, 1.0,
-                        TextAnchor.B, color=(1.0, 1.0, 1.0))
+                          TextAnchor.B, color=(1.0, 1.0, 1.0))
             if cmd:
                 variable = cmd.split(' ')[0]
 
@@ -283,13 +408,13 @@ def main_render():
         options = opt.__str__().split('||')
         for i, o in enumerate(options):
             wnd.draw_text(o, -0.9, 0.9-i*0.06, 0.5,
-                        TextAnchor.L,
-                        color=1.0 if o.startswith(variable) else 0.5
-                        )
+                          TextAnchor.L,
+                          color=1.0 if o.startswith(variable) else 0.5
+                          )
 
         # Display time
         wnd.draw_text(f'{t=:d}', 0, -0.9, 1.0,
-                    TextAnchor.B, color=(1.0, 1.0, 1.0))
+                      TextAnchor.B, color=(1.0, 1.0, 1.0))
 
     return
 
@@ -427,44 +552,95 @@ class Design:
         return self.jobs
 
 
-# %%
-design = Design(DESIGN_CONF)
-design.load_conf()
-[print(e) for e in design.jobs]
-
-parallel = Parallel()
-parallel.reset(ADDRESS)
-
 # %% ---- 2026-01-28 ------------------------
 # Play ground
-wnd = GLFWWindow()
-# wnd.load_font('resource/font/MTCORSVA.TTF')
-wnd.load_font('resource/font/MSYH.TTC')
-wnd.init_window()
+if __name__ == '__main__':
+    import multiprocessing
+    multiprocessing.freeze_support()
 
-keyboard = KeyboardHandler()
+    # 1. 创建设备容器并连接
+    dc = DeviceContainer(False)
+    logger.info(f"正在连接设备: {device_id}...")
+    device = dc.connect(device_id, timeout=30)
 
-opt = Options()
-opt.ratio = wnd.width / wnd.height
-opt.reset_time()
-opt.selected_patches = [
-    (0, 1, 10),
-    (1, 2, 20),
-]
+    if device is None:
+        logger.error(f"无法连接到设备：{device_id}")
+        sys.exit(1)
 
-print(opt)
+    logger.info(f'Connected to {device_id=}')
 
-shader, vao, index_count = compile_square()
+    # 2. 启动数据消费者进程
+    sub_res = device.subscribe()
+    if sub_res and len(sub_res) > 1:
+        signal_queue_proc = start_consumer_process(
+            consumer_process_wrapper,
+            sub_res[1],
+            "signal",
+            "SignalConsumer"
+        )
 
-glfw.swap_interval(1)
-glfw.set_key_callback(wnd.window, key_callback)
+    # 3. 设备参数配置与采集启动
+    logger.info("设备已连接，开始采集数据...")
+    device.set_acq_param([e for e in range(1, 1+64)], 1000, 188)
 
-wnd.render_loop(main_render)
+    device.start_acquisition()
+    is_acquiring = True
 
-wnd.cleanup()
+    design = Design(DESIGN_CONF)
+    design.load_conf()
+    [print(e) for e in design.jobs]
+
+    # parallel = Parallel()
+    # parallel.reset(ADDRESS)
+
+    wnd = GLFWWindow()
+    # wnd.load_font('resource/font/MTCORSVA.TTF')
+    wnd.load_font('resource/font/MSYH.TTC')
+    wnd.init_window()
+
+    keyboard = KeyboardHandler()
+
+    opt = Options()
+    opt.ratio = wnd.width / wnd.height
+    opt.reset_time()
+    opt.selected_patches = [
+        (0, 1, 10),
+        (1, 2, 20),
+    ]
+
+    # =========================================================================
+    # 🔄 核心复原：开启 120Hz 垂直同步（V-Sync 开启）
+    # =========================================================================
+    glfw.swap_interval(1)  # 设为 1：复原高刷同步，严格按照 120Hz 屏幕物理刷新率进行刺激渲染
+    # =========================================================================
+
+    shader, vao, index_count = compile_square()
+    glfw.set_key_callback(wnd.window, key_callback)
+
+    # =========================================================================
+    # 🔒 修复一：优化全局信号拦截器（完美解决 KeyboardInterrupt 未预料异常报错）
+    # =========================================================================
+    try:
+        logger.info("进入渲染死循环，120Hz 垂直同步已就绪。")
+        wnd.render_loop(main_render)
+    except (KeyboardInterrupt, SystemExit):
+        # 显式捕获中断与退出信号，消除包裹类报错
+        logger.warning("检测到用户执行了快捷键终止 (Ctrl+C)，正在拦截并安全进入落盘流程...")
+    except BaseException as run_err:
+        # 兼容 C++ 底层信号向上抛出的特殊异常基类
+        logger.warning(f"主循环因信号或中断安全退出: {run_err}")
+    finally:
+        try:
+            wnd.cleanup()
+        except:
+            pass
+        on_stop_quanlan()
+
+    # Everything is done.
+    exit(0)
 
 # %% ---- 2026-01-28 ------------------------
-# Pending
+# Every thing is done
 
 
 # %% ---- 2026-01-28 ------------------------

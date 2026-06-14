@@ -1,0 +1,1 @@
+D:\software\anaconda3\condabin\conda.bat activate QUANLAN_SDK && python Stage3B-withdevice.py
