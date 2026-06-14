@@ -50,12 +50,16 @@ void main() {
 
     // Default color
     oColor = vec4(vec3(0.0), 0.5);
-    oColor = vec4(vec3(150.0/255.0), 1.0);
+    oColor = vec4(vec3(150.0 / 255.0), 1.0);
 
     // rgba color format
     // red
     // oColor = vec4(1.0, 0.0, 0.0, 1.0);
+    oColor = vec4(vec3(150.0 / 255.0), 1.0);
 
+    // rgba color format
+    // red
+    // oColor = vec4(1.0, 0.0, 0.0, 1.0);
 
     if(uCommandMode) {
         oColor = vec4(vec3(0.2), 0.8);

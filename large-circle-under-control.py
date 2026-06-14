@@ -33,6 +33,8 @@ from parallel_code import Code
 # %%
 ADDRESS = 'DEFC'
 DESIGN_CONF = './design_stage3.conf'
+ADDRESS = 'DEFC'
+DESIGN_CONF = './design_stage3.conf'
 
 # %%
 
@@ -261,6 +263,7 @@ def main_render():
             eval(f'setattr(opt, "{b}", {c})')
             log(f'{job=}')
             if a > -10:
+            if a > -10:
                 if b == 'focus_color':
                     parallel.send(Code.focus_change)
                 if b == 'selected_patches':
@@ -275,7 +278,16 @@ def main_render():
         if opt.command_mode:
             cmd = ''.join(opt.command).strip()
             wnd.draw_text(f'$ {cmd}|', 0, 0.8, 1.0,
-                        TextAnchor.B, color=(1.0, 1.0, 1.0))
+                          TextAnchor.B, color=(1.0, 1.0, 1.0))
+            if cmd:
+                variable = cmd.split(' ')[0]
+    if False:
+        # Display commands
+        variable = 'This can not happen'
+        if opt.command_mode:
+            cmd = ''.join(opt.command).strip()
+            wnd.draw_text(f'$ {cmd}|', 0, 0.8, 1.0,
+                          TextAnchor.B, color=(1.0, 1.0, 1.0))
             if cmd:
                 variable = cmd.split(' ')[0]
 
@@ -283,13 +295,13 @@ def main_render():
         options = opt.__str__().split('||')
         for i, o in enumerate(options):
             wnd.draw_text(o, -0.9, 0.9-i*0.06, 0.5,
-                        TextAnchor.L,
-                        color=1.0 if o.startswith(variable) else 0.5
-                        )
+                          TextAnchor.L,
+                          color=1.0 if o.startswith(variable) else 0.5
+                          )
 
         # Display time
         wnd.draw_text(f'{t=:d}', 0, -0.9, 1.0,
-                    TextAnchor.B, color=(1.0, 1.0, 1.0))
+                      TextAnchor.B, color=(1.0, 1.0, 1.0))
 
     return
 
@@ -456,6 +468,7 @@ print(opt)
 
 shader, vao, index_count = compile_square()
 
+glfw.swap_interval(1)
 glfw.swap_interval(1)
 glfw.set_key_callback(wnd.window, key_callback)
 
